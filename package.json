@@ -1,0 +1,49 @@
+{
+  "name": "@loopgantt/mcp-server",
+  "version": "1.3.0",
+  "mcpName": "com.loopgantt/mcp-server",
+  "description": "MCP server for LoopGantt — create Gantt charts from Claude Desktop, Cursor or any MCP client, no account needed",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "loopgantt-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "cursor",
+    "gantt",
+    "gantt-chart",
+    "project-management",
+    "critical-path",
+    "loopgantt"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/idrjoe/loopgantt-mcp"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
