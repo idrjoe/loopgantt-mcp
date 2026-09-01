@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "com.loopgantt/mcp-server",
   "description": "Create scheduled Gantt charts with critical path from a plain-language plan — no account or key.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "websiteUrl": "https://loopgantt.com",
   "remotes": [
     {
@@ -15,7 +15,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@loopgantt/mcp-server",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "transport": {
         "type": "stdio"
       },

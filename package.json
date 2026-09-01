@@ -1,6 +1,6 @@
 {
   "name": "@loopgantt/mcp-server",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "mcpName": "com.loopgantt/mcp-server",
   "description": "MCP server for LoopGantt — create Gantt charts from Claude Desktop, Cursor or any MCP client, no account needed",
   "type": "module",
@@ -14,7 +14,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "~1.30.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

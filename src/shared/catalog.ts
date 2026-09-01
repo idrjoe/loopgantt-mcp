@@ -27,7 +27,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 /** Version reported by both servers (`serverInfo.version`, client header). */
-export const MCP_VERSION = '1.3.0';
+export const MCP_VERSION = '1.5.0';
 export const TEMPLATE_URI_PREFIX = 'loopgantt://templates/';
 export const SERVER_INFO = { name: 'loopgantt', version: MCP_VERSION } as const;
 export const SERVER_CAPABILITIES = { tools: {}, resources: {}, prompts: {} } as const;
@@ -37,7 +37,9 @@ export const SERVER_INSTRUCTIONS =
   'LoopGantt turns a task list into a scheduled Gantt chart (critical-path engine, working-day calendar). No account or API key is needed. ' +
   'create_gantt stores a chart and returns a picture, the dates, the critical path and a link; the link is the ONLY handle to the chart and expires (7 days, 30 once opened, forever once saved to a free account), so always show it to the user. ' +
   'Use schedule_project for what-if questions (nothing is stored) and list_templates / get_template for industry starting points. ' +
-  'Durations are working days; duration 0 = milestone; dependencies are the 0-based positions of EARLIER tasks (or { task, type: FS|SS|FF|SF, lag }); group tasks under top-level phases with isPhase: true + parent (the phase position); chain only true prerequisites - independent tasks run in parallel. Ask the user for the start date and any deadline before creating (start defaults to today); pass deadline so the chart shows it. When it would change the plan, also ask (max 2-3 questions, one message): solo or team (drives parallelism), working days (workDays; do not assume Mon-Fri), vacations (holidays).';
+  'Durations are working days; duration 0 = milestone; dependencies are the 0-based positions of EARLIER tasks (or { task, type: FS|SS|FF|SF, lag }); group tasks under top-level phases with isPhase: true + parent (the phase position); chain only true prerequisites - independent tasks run in parallel. Ask the user for the start date and any deadline before creating (start defaults to today); pass deadline so the chart shows it. When it would change the plan, also ask (max 2-3 questions, one message): solo or team (drives parallelism), working days (workDays; do not assume Mon-Fri), vacations (holidays). ' +
+  'A task with a due date (essay due Oct 15, exam on Nov 3, launch day) takes deadline: YYYY-MM-DD - a marker that never moves the schedule; the reply reports each task fit (buffer or days late). ' +
+  'Use create_gantt when the user wants a chart they can open, export or save; use schedule_project only for what-if date math where nothing should be stored.';
 
 // ---------------------------------------------------------------------------
 // API types (the v1 REST contract, see public/openapi.json)
@@ -57,15 +59,26 @@ export interface GanttTaskInput {
   parent?: number;
   description?: string;
   dependencies?: Array<number | DependencyInput>;
+  /** Finish-by date YYYY-MM-DD — a marker, never a constraint. */
+  deadline?: string;
 }
 
 export interface PlanRequest {
   name?: string;
   description?: string;
   startDate?: string;
+  /** Project deadline YYYY-MM-DD (drawn on the chart; the reply reports the fit). */
+  deadline?: string;
   workDays?: number[];
   holidays?: string[];
   tasks: GanttTaskInput[];
+}
+
+/** How a scheduled end relates to a deadline marker. */
+export interface DeadlineFit {
+  late: boolean;
+  /** Calendar days from the scheduled end to the deadline: >0 buffer, <0 late. */
+  days: number;
 }
 
 export interface ScheduledTask {
@@ -80,6 +93,8 @@ export interface ScheduledTask {
   isPhase?: boolean;
   isCritical: boolean;
   totalFloat: number;
+  deadline?: string | null;
+  fit?: DeadlineFit | null;
 }
 
 export interface ScheduleSummary {
@@ -95,6 +110,9 @@ export interface CreateGanttResponse {
     name: string;
     description: string | null;
     startDate: string;
+    deadline?: string | null;
+    /** Project-level fit against `deadline`; null without one. */
+    fit?: (DeadlineFit & { deadline: string; projectEndDate: string }) | null;
     taskCount: number;
     dependencyCount: number;
     claimUrl: string;
@@ -275,7 +293,18 @@ function fmtDate(iso: string): string {
   return iso.slice(0, 10);
 }
 
+function dueCell(t: ScheduledTask): string {
+  if (t.deadline === undefined || t.deadline === null) return '—';
+  const fit = t.fit;
+  if (fit === undefined || fit === null) return t.deadline;
+  if (fit.late) return `${t.deadline} (${String(-fit.days)} d late)`;
+  if (fit.days === 0) return `${t.deadline} (on time)`;
+  return `${t.deadline} (+${String(fit.days)} d)`;
+}
+
 export function scheduleTable(schedule: ScheduleSummary): string {
+  // The Due column appears only when some task carries a deadline marker.
+  const hasDue = schedule.tasks.some((t) => t.deadline !== undefined && t.deadline !== null);
   const rows = schedule.tasks.map((t) => {
     const span = t.isMilestone ? `${t.start} ◆` : `${t.start} → ${t.end}`;
     const days =
@@ -289,9 +318,12 @@ export function scheduleTable(schedule: ScheduleSummary): string {
       : t.totalFloat > 0
         ? ` (+${String(t.totalFloat)} d float)`
         : '';
-    return `| ${t.isPhase === true ? '▸ ' : ''}${cell(t.name)}${flag} | ${span} | ${days} |`;
+    const due = hasDue ? ` ${dueCell(t)} |` : '';
+    return `| ${t.isPhase === true ? '▸ ' : ''}${cell(t.name)}${flag} | ${span} | ${days} |${due}`;
   });
-  return ['| Task | Dates | Duration |', '|---|---|---|', ...rows].join('\n');
+  const header = hasDue ? '| Task | Dates | Duration | Due |' : '| Task | Dates | Duration |';
+  const sep = hasDue ? '|---|---|---|---|' : '|---|---|---|';
+  return [header, sep, ...rows].join('\n');
 }
 
 const CRITICAL_PATH_MAX_NAMES = 20;
@@ -322,9 +354,19 @@ export function ganttReply(
 ): string {
   const { data } = res;
   const s = data.schedule;
+  const fit = data.fit ?? null;
+  const fitLine =
+    fit === null
+      ? ''
+      : fit.late
+        ? `⚠ Deadline ${fit.deadline}: the plan finishes ${String(-fit.days)} days LATE (${fit.projectEndDate}) — suggest what to shorten or parallelise.`
+        : fit.days === 0
+          ? `Deadline ${fit.deadline}: the plan finishes exactly on the deadline.`
+          : `Deadline ${fit.deadline}: the plan finishes ${String(fit.days)} days early (${fit.projectEndDate}).`;
   const lines = [
     `**${cell(data.name)}** — ${plural(data.taskCount, 'task')}, ${plural(data.dependencyCount, 'dependency', 'dependencies')}`,
     summaryLine(s),
+    ...(fitLine !== '' ? [fitLine] : []),
     '',
     scheduleTable(s),
     '',
@@ -420,6 +462,11 @@ export const GANTT_TASK_SCHEMA = {
         'Position (0-based) of an EARLIER task with isPhase=true that this task belongs to',
     },
     description: { type: 'string' },
+    deadline: {
+      type: 'string',
+      description:
+        'Finish-by date YYYY-MM-DD for a task with a due date (essay due, exam day, launch). A MARKER: the task is still scheduled normally and the reply reports its fit - buffer or days late.',
+    },
     dependencies: {
       type: 'array',
       description:
@@ -467,7 +514,7 @@ export const PLAN_PROPERTIES = {
 export const CREATE_GANTT_TOOL = {
   name: 'create_gantt',
   description:
-    'Create a Gantt chart from a task list — no account or API key needed. YOU author the plan: list the tasks in execution order with realistic working-day durations and dependencies (0-based positions of earlier tasks; use { task, type, lag } for start-to-start/finish-to-finish links or lag). Milestones have duration 0. Only add a dependency where a task truly needs another one finished - independent tasks should run in PARALLEL (share a predecessor, or take no dependencies at all and start at the project start). Group tasks into top-level phases for a structured plan/WBS: the phase task gets isPhase: true, its tasks get parent = the position of the phase. LoopGantt schedules it with its critical-path engine and returns a picture of the chart, the dates, the critical path and a link where the user can view, export (PNG/PDF) and save the chart. Always show the user the link.',
+    'Create a Gantt chart from a task list — no account or API key needed. YOU author the plan: list the tasks in execution order with realistic working-day durations and dependencies (0-based positions of earlier tasks; use { task, type, lag } for start-to-start/finish-to-finish links or lag). Milestones have duration 0. Only add a dependency where a task truly needs another one finished - independent tasks should run in PARALLEL (share a predecessor, or take no dependencies at all and start at the project start). Group tasks into top-level phases for a structured plan/WBS: the phase task gets isPhase: true, its tasks get parent = the position of the phase. LoopGantt schedules it with its critical-path engine and returns a picture of the chart, the dates, the critical path and a link where the user can view, export (PNG/PDF) and save the chart. Always show the user the link. Tasks with a due date take deadline: YYYY-MM-DD (a marker - the reply reports the fit). Use create_gantt when the user wants a chart to open, export or save; use schedule_project instead for what-if date math where nothing should be stored.',
   inputSchema: {
     type: 'object' as const,
     required: ['name', 'tasks'],
@@ -572,7 +619,7 @@ export function planPromptText(args: Record<string, unknown>): string {
     '',
     'Steps:',
     '1. If the scope is unclear, ask at most two clarifying questions; otherwise proceed.',
-    '2. Draft a work breakdown of 8–25 tasks in execution order with realistic working-day durations, milestones (duration 0) for key checkpoints, and dependencies as 0-based positions of earlier tasks (use { task, type, lag } for start-to-start/finish-to-finish links).',
+    '2. Draft a work breakdown of 8–25 tasks in execution order with realistic working-day durations, milestones (duration 0) for key checkpoints, and dependencies as 0-based positions of earlier tasks (use { task, type, lag } for start-to-start/finish-to-finish links). Give tasks with a due date a deadline (YYYY-MM-DD).',
     '3. Optionally call list_templates / get_template to start from an industry template.',
     '4. Call create_gantt with the plan (omit startDate unless the user gave one — the server uses today).',
     '5. Show the returned picture, summarise the critical path and the finish date, and give the user the link to open, export or save the chart.',
