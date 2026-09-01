@@ -37,7 +37,7 @@ export const SERVER_INSTRUCTIONS =
   'LoopGantt turns a task list into a scheduled Gantt chart (critical-path engine, working-day calendar). No account or API key is needed. ' +
   'create_gantt stores a chart and returns a picture, the dates, the critical path and a link; the link is the ONLY handle to the chart and expires (7 days, 30 once opened, forever once saved to a free account), so always show it to the user. ' +
   'Use schedule_project for what-if questions (nothing is stored) and list_templates / get_template for industry starting points. ' +
-  'Durations are working days; duration 0 = milestone; dependencies are the 0-based positions of EARLIER tasks (or { task, type: FS|SS|FF|SF, lag }).';
+  'Durations are working days; duration 0 = milestone; dependencies are the 0-based positions of EARLIER tasks (or { task, type: FS|SS|FF|SF, lag }); group tasks under top-level phases with isPhase: true + parent (the phase position); chain only true prerequisites - independent tasks run in parallel. Ask the user for the start date and any deadline before creating (start defaults to today); pass deadline so the chart shows it. When it would change the plan, also ask (max 2-3 questions, one message): solo or team (drives parallelism), working days (workDays; do not assume Mon-Fri), vacations (holidays).';
 
 // ---------------------------------------------------------------------------
 // API types (the v1 REST contract, see public/openapi.json)
@@ -53,6 +53,8 @@ export interface GanttTaskInput {
   name: string;
   duration?: number;
   isMilestone?: boolean;
+  isPhase?: boolean;
+  parent?: number;
   description?: string;
   dependencies?: Array<number | DependencyInput>;
 }
@@ -75,6 +77,7 @@ export interface ScheduledTask {
   end: string;
   durationDays: number;
   isMilestone: boolean;
+  isPhase?: boolean;
   isCritical: boolean;
   totalFloat: number;
 }
@@ -275,13 +278,18 @@ function fmtDate(iso: string): string {
 export function scheduleTable(schedule: ScheduleSummary): string {
   const rows = schedule.tasks.map((t) => {
     const span = t.isMilestone ? `${t.start} ◆` : `${t.start} → ${t.end}`;
-    const days = t.isMilestone ? 'milestone' : `${String(t.durationDays)} d`;
+    const days =
+      t.isPhase === true
+        ? `phase · ${String(t.durationDays)} d`
+        : t.isMilestone
+          ? 'milestone'
+          : `${String(t.durationDays)} d`;
     const flag = t.isCritical
       ? ' ★'
       : t.totalFloat > 0
         ? ` (+${String(t.totalFloat)} d float)`
         : '';
-    return `| ${cell(t.name)}${flag} | ${span} | ${days} |`;
+    return `| ${t.isPhase === true ? '▸ ' : ''}${cell(t.name)}${flag} | ${span} | ${days} |`;
   });
   return ['| Task | Dates | Duration |', '|---|---|---|', ...rows].join('\n');
 }
@@ -400,6 +408,17 @@ export const GANTT_TASK_SCHEMA = {
       description: 'Working days (default 1). 0 makes the task a milestone.',
     },
     isMilestone: { type: 'boolean', description: 'Milestone (zero duration, drawn as a diamond)' },
+    isPhase: {
+      type: 'boolean',
+      description:
+        'Top-level phase (a group). Tasks join it with parent = this position. Phases take no dependencies and no parent; their dates become the envelope of their tasks.',
+    },
+    parent: {
+      type: 'integer',
+      minimum: 0,
+      description:
+        'Position (0-based) of an EARLIER task with isPhase=true that this task belongs to',
+    },
     description: { type: 'string' },
     dependencies: {
       type: 'array',
@@ -427,6 +446,11 @@ export const PLAN_PROPERTIES = {
   name: { type: 'string', description: 'Project name' },
   description: { type: 'string', description: 'Optional one-line description' },
   startDate: { type: 'string', description: 'YYYY-MM-DD (defaults to today)' },
+  deadline: {
+    type: 'string',
+    description:
+      'Optional deadline YYYY-MM-DD - drawn on the chart; compare with the returned projectEndDate and warn the user if the plan overshoots',
+  },
   workDays: {
     type: 'array',
     items: { type: 'integer', minimum: 1, maximum: 7 },
@@ -443,7 +467,7 @@ export const PLAN_PROPERTIES = {
 export const CREATE_GANTT_TOOL = {
   name: 'create_gantt',
   description:
-    'Create a Gantt chart from a task list — no account or API key needed. YOU author the plan: list the tasks in execution order with realistic working-day durations and dependencies (0-based positions of earlier tasks; use { task, type, lag } for start-to-start/finish-to-finish links or lag). Milestones have duration 0. LoopGantt schedules it with its critical-path engine and returns a picture of the chart, the dates, the critical path and a link where the user can view, export (PNG/PDF) and save the chart. Always show the user the link.',
+    'Create a Gantt chart from a task list — no account or API key needed. YOU author the plan: list the tasks in execution order with realistic working-day durations and dependencies (0-based positions of earlier tasks; use { task, type, lag } for start-to-start/finish-to-finish links or lag). Milestones have duration 0. Only add a dependency where a task truly needs another one finished - independent tasks should run in PARALLEL (share a predecessor, or take no dependencies at all and start at the project start). Group tasks into top-level phases for a structured plan/WBS: the phase task gets isPhase: true, its tasks get parent = the position of the phase. LoopGantt schedules it with its critical-path engine and returns a picture of the chart, the dates, the critical path and a link where the user can view, export (PNG/PDF) and save the chart. Always show the user the link.',
   inputSchema: {
     type: 'object' as const,
     required: ['name', 'tasks'],

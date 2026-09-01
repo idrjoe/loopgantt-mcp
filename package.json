@@ -1,6 +1,6 @@
 {
   "name": "@loopgantt/mcp-server",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "mcpName": "com.loopgantt/mcp-server",
   "description": "MCP server for LoopGantt — create Gantt charts from Claude Desktop, Cursor or any MCP client, no account needed",
   "type": "module",
